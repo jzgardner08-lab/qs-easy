@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { SurveyTool } from './SurveyTool';
 import type { Project, Category, Variation, BoQItem } from './types';
 
@@ -53,7 +53,7 @@ export default function App() {
   const views = { dashboard: 'Overview', boq: 'Bill of quantities', variations: 'Variation ledger', takeoff: 'Take-off calculator', rate: 'Unit rate build-up', report: 'Cost report' } as const
   type View = keyof typeof views
   const [currentView, setCurrentView] = useState<View>('dashboard')
-  const [project, setProject] = useState<Project>(() => {
+  const [project, updateProject] = useState<Project>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
       if (saved && Array.isArray(saved.items) && Array.isArray(saved.variations)) return saved
@@ -61,10 +61,14 @@ export default function App() {
     return initialProject
   })
   const [saveError, setSaveError] = useState(false)
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(project)); setSaveError(false) }
+  const latestProject = useRef(project)
+  function setProject(change: React.SetStateAction<Project>) {
+    const next = typeof change === 'function' ? change(latestProject.current) : change
+    latestProject.current = next
+    updateProject(next)
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setSaveError(false) }
     catch { setSaveError(true) }
-  }, [project])
+  }
   return <div className="workspace">
     <header className="mast no-print"><div className="mast-inner"><div className="brand"><i aria-hidden="true">QS</i> QS Easy</div><span>Commercial workspace</span></div></header>
     <div className="shell"><nav className="rail no-print" aria-label="Workspace">
