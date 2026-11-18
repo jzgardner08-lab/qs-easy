@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { SurveyTool } from './SurveyTool';
 import type { Project, Category, Variation, BoQItem } from './types';
 
 // --- Constants & Helpers ---
@@ -21,7 +22,7 @@ const initialProject: Project = {
 // Helper to calculate project totals for the Dashboard and Report
 function calculateMetrics(project: Project) {
   const totalBaseCost = project.items.reduce((acc, item) => acc + (item.quantity * item.unitRate), 0);
-  const totalVariations = project.variations.reduce((acc, v) => acc + v.impactAmount, 0);
+  const totalVariations = project.variations.reduce((acc, v) => acc + (v.status === 'Approved' ? v.impactAmount : 0), 0);
   const totalContractValue = totalBaseCost + totalVariations;
 
   const totalProgressWeight = project.items.reduce((acc, item) => {
@@ -29,7 +30,7 @@ function calculateMetrics(project: Project) {
     return acc + (itemCost * (item.progress / 100));
   }, 0);
 
-  const totalProgressPercent = project.items.length > 0 
+  const totalProgressPercent = totalBaseCost > 0 
     ? (totalProgressWeight / totalBaseCost) * 100 
     : 0;
 
@@ -49,166 +50,55 @@ function calculateMetrics(project: Project) {
 // --- Main Application Component ---
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<'dashboard' | 'boq' | 'variations' | 'report'>('dashboard');
-  const [project, setProject] = useState<Project>(initialProject);
-
-  // 1. Load data from LocalStorage when the app starts
+  const views = { dashboard: 'Overview', boq: 'Bill of quantities', variations: 'Variation ledger', takeoff: 'Take-off calculator', rate: 'Unit rate build-up', report: 'Cost report' } as const
+  type View = keyof typeof views
+  const [currentView, setCurrentView] = useState<View>('dashboard')
+  const [project, setProject] = useState<Project>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+      if (saved && Array.isArray(saved.items) && Array.isArray(saved.variations)) return saved
+    } catch { /* A fresh project is used when storage is unavailable. */ }
+    return initialProject
+  })
+  const [saveError, setSaveError] = useState(false)
   useEffect(() => {
-    const savedData = localStorage.getItem(STORAGE_KEY);
-    if (savedData) {
-      try {
-        const parsed = JSON.parse(savedData);
-        setProject(parsed);
-      } catch (e) {
-        console.error("Failed to parse saved project data", e);
-      }
-    }
-  }, []);
-
-  // 2. Save data to LocalStorage automatically every time the project state changes
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
-  }, [project]);
-
-  return (
-    <div className="flex h-screen bg-slate-50 font-sans">
-      {/* Sidebar Navigation */}
-      <div className="w-64 bg-slate-900 text-white p-6 flex flex-col shadow-xl no-print">
-        <h1 className="text-2xl font-bold mb-8 tracking-tight">QS-Easy</h1>
-        <nav className="space-y-2">
-          <button 
-            onClick={() => setCurrentView('dashboard')}
-            className={`block w-full text-left p-3 rounded transition ${currentView === 'dashboard' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}
-          >
-            Dashboard
-          </button>
-          <button 
-            onClick={() => setCurrentView('boq')}
-            className={`block w-full text-left p-3 rounded transition ${currentView === 'boq' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}
-          >
-            Bill of Quantities
-          </button>
-          <button 
-            onClick={() => setCurrentView('variations')}
-            className={`block w-full text-left p-3 rounded transition ${currentView === 'variations' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}
-          >
-            Variations
-          </button>
-          <button 
-            onClick={() => setCurrentView('report')}
-            className={`block w-full text-left p-3 rounded transition ${currentView === 'report' ? 'bg-blue-600' : 'hover:bg-slate-800'}`}
-          >
-            Print Report
-          </button>
-        </nav>
-        <div className="mt-auto text-xs text-slate-500">
-          v1.0 MVP
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-auto p-10">
-        <header className="mb-8 flex justify-between items-center">
-          <div className="no-print">
-            <h2 className="text-3xl font-extrabold text-slate-800">{project.name}</h2>
-            <p className="text-slate-500">{project.description}</p>
-          </div>
-          {currentView !== 'report' && (
-             <button 
-              onClick={() => {
-                if(confirm("Are you sure? This will reset your current project data.")) {
-                  setProject(initialProject);
-                }
-              }}
-              className="text-xs bg-slate-200 px-3 py-1 rounded hover:bg-red-100 transition"
-             >
-              Reset Project
-             </button>
-          )}
-        </header>
-
-        <main>
-          {currentView === 'dashboard' && <Dashboard project={project} />}
-          {currentView === 'boq' && <BoQ project={project} setProject={setProject} />}
-          {currentView === 'variations' && <Variations project={project} setProject={setProject} />}
-          {currentView === 'report' && <ReportView project={project} />}
-        </main>
-      </div>
-      
-      {/* Print Styling */}
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          body { background: white; }
-          .flex-1 { padding: 0 !important; }
-        }
-      `}</style>
-    </div>
-  );
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(project)); setSaveError(false) }
+    catch { setSaveError(true) }
+  }, [project])
+  return <div className="workspace">
+    <header className="mast no-print"><div className="mast-inner"><div className="brand"><i aria-hidden="true">QS</i> QS Easy</div><span>Commercial workspace</span></div></header>
+    <div className="shell"><nav className="rail no-print" aria-label="Workspace">
+      {(Object.keys(views) as View[]).map(view => <button key={view} aria-current={currentView === view ? 'page' : undefined} onClick={() => setCurrentView(view)}>{views[view]}</button>)}
+    </nav><main>
+      <header className="project no-print"><div><small>PROJECT</small><h1>{project.name}</h1><p>{project.description}</p></div>
+      <button className="reset" onClick={() => { if (confirm('Replace this project with the original example?')) setProject(initialProject) }}>Reset project</button></header>
+      {saveError && <p role="alert">Browser storage is unavailable. Changes will last for this session only.</p>}
+      {currentView === 'dashboard' && <Dashboard project={project} open={setCurrentView}/>}
+      {currentView === 'boq' && <BoQ project={project} setProject={setProject}/>}
+      {currentView === 'variations' && <Variations project={project} setProject={setProject}/>}
+      {(currentView === 'takeoff' || currentView === 'rate') && <SurveyTool key={currentView} mode={currentView} onAdd={item => setProject(p => ({ ...p, items: [...p.items, item] }))}/>}
+      {currentView === 'report' && <ReportView project={project}/>}
+    </main></div></div>
 }
 
-// --- Sub-components ---
+const pounds = (value: number) => value.toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 2, minimumFractionDigits: 0 })
 
-function Dashboard({ project }: { project: Project }) {
-  const metrics = calculateMetrics(project);
-  return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border-b-4 border-blue-500">
-          <h3 className="text-xs font-bold text-slate-400 uppercase mb-1">Contract Value</h3>
-          <p className="text-3xl font-bold text-slate-800">£{metrics.totalContractValue.toLocaleString()}</p>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border-b-4 border-red-500">
-          <h3 className="text-xs font-bold text-slate-400 uppercase mb-1">Variation Impact</h3>
-          <p className="text-3xl font-bold text-red-600">{metrics.totalVariations >= 0 ? '+' : ''}£{metrics.totalVariations.toLocaleString()}</p>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border-b-4 border-green-500">
-          <h3 className="text-xs font-bold text-slate-400 uppercase mb-1">Estimated Spend</h3>
-          <p className="text-3xl font-bold text-green-600">£{metrics.estimatedSpend.toLocaleString()}</p>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border-b-4 border-orange-500">
-          <h3 className="text-xs font-bold text-slate-400 uppercase mb-1">Remaining Budget</h3>
-          <p className="text-3xl font-bold text-orange-600">£{metrics.remainingBudget.toLocaleString()}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-8 rounded-xl shadow-sm">
-          <h3 className="text-xl font-bold mb-6">Project Progress Overview</h3>
-          <div className="relative pt-1">
-            <div className="flex mb-2 items-center justify-between">
-              <span className="text-xs font-bold text-blue-600">Completion Status</span>
-              <span className="text-xs font-bold text-blue-600">{Math.round(metrics.totalProgressPercent)}%</span>
-            </div>
-            <div className="overflow-hidden h-6 mb-4 text-xs flex rounded bg-slate-100">
-              <div 
-                style={{ width: `${metrics.totalProgressPercent}%` }}
-                className="shadow-none flex flex-col text-center whitespace-nowrap justify-center bg-blue-600 text-white transition-all duration-1000"
-              ></div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-8 rounded-xl shadow-sm">
-          <h3 className="text-xl font-bold mb-6">Financial Breakdown</h3>
-          <div className="space-y-4">
-            <div className="flex justify-between border-b pb-2">
-              <span className="text-slate-600">Base Contract</span>
-              <span className="font-bold">£{metrics.totalBaseCost.toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between border-b pb-2">
-              <span className="text-slate-600">Variations</span>
-              <span className="font-bold text-red-600">{metrics.totalVariations >= 0 ? '+' : ''}£{metrics.totalVariations.toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between pt-2">
-              <span className="text-xl font-bold">Grand Total</span>
-              <span className="text-xl font-bold text-blue-600">£{metrics.totalContractValue.toLocaleString()}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function Dashboard({ project, open }: {project: Project, open: (view: 'boq' | 'variations' | 'takeoff' | 'rate') => void}) {
+  const m = calculateMetrics(project)
+  const breakdown = new Map<string, number>()
+  for (const item of project.items) breakdown.set(item.category, (breakdown.get(item.category) || 0) + item.quantity * item.unitRate)
+  const pending = project.variations.filter(v => v.status === 'Pending')
+  return <div className="overview"><section className="hero"><div><small>ADJUSTED CONTRACT VALUE</small>
+    <strong>{pounds(m.totalContractValue)}</strong><p>Base bill plus approved variations</p></div>
+    <div className="progress"><span>Bill completion by value</span><b>{Math.round(m.totalProgressPercent)}%</b><progress max="100" value={m.totalProgressPercent}/></div></section>
+    <div className="stats">{[['Base bill',m.totalBaseCost],['Approved variations',m.totalVariations],['Measured work to date',m.estimatedSpend]].map(([label,value]) => <section key={label} className="panel"><small>{label}</small><strong>{pounds(Number(value))}</strong></section>)}</div>
+    <div className="details"><section className="panel"><h2>Cost by work category</h2>{breakdown.size === 0 && <p>Add a bill item to see the breakdown.</p>}
+    {[...breakdown].sort((a,b) => b[1]-a[1]).map(([name,cost]) => <div className="cost-row" key={name}><span>{name}</span><b>{pounds(cost)}</b><progress max="100" value={m.totalBaseCost > 0 ? 100*cost/m.totalBaseCost : 0}/></div>)}
+    <button className="link" onClick={() => open('boq')}>Open bill of quantities →</button></section>
+    <section className="panel"><h2>Pending variations</h2><strong>{pounds(pending.reduce((sum,v) => sum+v.impactAmount,0))}</strong><p>{pending.length} awaiting approval</p>
+    <button className="link" onClick={() => open('variations')}>Review ledger →</button></section></div>
+    <h2>Measurement &amp; pricing</h2><div className="shortcuts"><button onClick={() => open('takeoff')}><b>Take-off calculator ↗</b><span>Measure lengths, areas and volumes</span></button><button onClick={() => open('rate')}><b>Unit rate build-up ↗</b><span>Price materials, labour and plant</span></button></div>
+  </div>
 }
 
 function BoQ({ project, setProject }: { project: Project, setProject: React.Dispatch<React.SetStateAction<Project>> }) {
@@ -246,19 +136,19 @@ function BoQ({ project, setProject }: { project: Project, setProject: React.Disp
     <div className="bg-white p-8 rounded-xl shadow-sm">
       <h3 className="text-2xl font-bold mb-6">Bill of Quantities</h3>
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8 p-6 bg-slate-50 rounded-xl border">
-        <input className="col-span-2 md:col-span-3 p-2 border rounded" placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
-        <select className="p-2 border rounded" value={newCategory} onChange={(e) => setNewCategory(e.target.value as Category)}>
+        <label>Description<input className="col-span-2 md:col-span-3 p-2 border rounded" placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} /></label>
+        <label>Category<select className="p-2 border rounded" value={newCategory} onChange={(e) => setNewCategory(e.target.value as Category)}>
           <option value="Preliminaries">Preliminaries</option>
           <option value="Substructure">Substructure</option>
           <option value="Superstructure">Superstructure</option>
           <option value="Finishes">Finishes</option>
           <option value="Services">Services</option>
           <option value="Other">Other</option>
-        </select>
-        <input className="p-2 border rounded" placeholder="Unit" value={newUnit} onChange={(e) => setNewUnit(e.target.value)} />
-        <input className="p-2 border rounded" type="number" placeholder="Qty" value={newQty} onChange={(e) => setNewQty(Number(e.target.value))} />
-        <input className="p-2 border rounded" type="number" placeholder="Rate" value={newRate} onChange={(e) => setNewRate(Number(e.target.value))} />
-        <input className="p-2 border rounded" type="number" placeholder="Prog" value={newProg} onChange={(e) => setNewProg(Number(e.target.value))} />
+        </select></label>
+        <label>Unit<input className="p-2 border rounded" placeholder="Unit" value={newUnit} onChange={(e) => setNewUnit(e.target.value)} /></label>
+        <label>Quantity<input className="p-2 border rounded" type="number" placeholder="Qty" value={newQty} onChange={(e) => setNewQty(Number(e.target.value))} /></label>
+        <label>Rate (£)<input className="p-2 border rounded" type="number" placeholder="Rate" value={newRate} onChange={(e) => setNewRate(Number(e.target.value))} /></label>
+        <label>Progress (%)<input className="p-2 border rounded" type="number" placeholder="Prog" value={newProg} onChange={(e) => setNewProg(Number(e.target.value))} /></label>
         <button onClick={addItem} className="bg-blue-600 text-white p-2 rounded font-bold hover:bg-blue-700">Add Item</button>
       </div>
 
@@ -414,17 +304,17 @@ function ReportView({ project }: { project: Project }) {
           <p className="text-xl font-bold">£{metrics.totalContractValue.toLocaleString()}</p>
         </div>
         <div className="p-4 bg-slate-50 rounded border">
-          <p className="text-xs uppercase text-slate-400">Variations</p>
+          <p className="text-xs uppercase text-slate-400">Approved variations</p>
           <p className={`text-xl font-bold ${metrics.totalVariations >= 0 ? 'text-green-600' : 'text-red-600'}`}>
             {metrics.totalVariations >= 0 ? '+' : ''}£{metrics.totalVariations.toLocaleString()}
           </p>
         </div>
         <div className="p-4 bg-slate-50 rounded border">
-          <p className="text-xs uppercase text-slate-400">Est. Spend</p>
+          <p className="text-xs uppercase text-slate-400">Measured work</p>
           <p className="text-xl font-bold text-green-600">£{metrics.estimatedSpend.toLocaleString()}</p>
         </div>
         <div className="p-4 bg-slate-50 rounded border">
-          <p className="text-xs uppercase text-slate-400">Remaining</p>
+          <p className="text-xs uppercase text-slate-400">Balance to value</p>
           <p className="text-xl font-bold text-orange-600">£{metrics.remainingBudget.toLocaleString()}</p>
         </div>
       </div>
