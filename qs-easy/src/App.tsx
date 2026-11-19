@@ -1,23 +1,13 @@
+import type { Portfolio } from './types'
+import { backupKey, workspaceKey, loadPortfolio, isPortfolio, download } from './storage'
+import { Commercial } from './Commercial'
+import { Cloud } from './Cloud'
+import { DataTools } from './DataTools'
+import { Review } from './Review'
+import { Entry } from './Forms'
 import React, { useState, useRef } from 'react';
 import { SurveyTool } from './SurveyTool';
 import type { Project, Category, Variation, BoQItem } from './types';
-
-// --- Constants & Helpers ---
-const STORAGE_KEY = 'qs_easy_project_data';
-
-// This is the default data if no previous project is found in the browser
-const initialProject: Project = {
-  id: '1',
-  name: 'New Commercial Building',
-  description: 'Development of a 3-story retail space.',
-  items: [
-    { id: 'i1', description: 'Site Clearance', category: 'Preliminaries', unit: 'm2', quantity: 500, unitRate: 5, progress: 100 },
-    { id: 'i2', description: 'Excavation', category: 'Substructure', unit: 'm3', quantity: 120, unitRate: 25, progress: 50 },
-  ],
-  variations: [
-    { id: 'v1', description: 'Additional foundation depth', impactAmount: 5000, date: '2023-10-01', status: 'Approved' },
-  ]
-};
 
 // Helper to calculate project totals for the Dashboard and Report
 function calculateMetrics(project: Project) {
@@ -50,39 +40,68 @@ function calculateMetrics(project: Project) {
 // --- Main Application Component ---
 
 export default function App() {
-  const views = { dashboard: 'Overview', boq: 'Bill of quantities', variations: 'Variation ledger', takeoff: 'Take-off calculator', rate: 'Unit rate build-up', report: 'Cost report' } as const
-  type View = keyof typeof views
-  const [currentView, setCurrentView] = useState<View>('dashboard')
-  const [project, updateProject] = useState<Project>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-      if (saved && Array.isArray(saved.items) && Array.isArray(saved.variations)) return saved
-    } catch { /* A fresh project is used when storage is unavailable. */ }
-    return initialProject
-  })
-  const [saveError, setSaveError] = useState(false)
-  const latestProject = useRef(project)
-  function setProject(change: React.SetStateAction<Project>) {
-    const next = typeof change === 'function' ? change(latestProject.current) : change
-    latestProject.current = next
-    updateProject(next)
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setSaveError(false) }
-    catch { setSaveError(true) }
+  const [initial] = useState(() => {try{return {data:loadPortfolio(),error:''}}catch{return {data:{projects:[],rates:[]} as Portfolio,error:'Saved data could not be read. Restore a backup before making changes.'}}})
+  const [portfolio,setPortfolio]=useState<Portfolio>(initial.data)
+  const [active,setActive]=useState('')
+  const [view,show]=useState('Overview')
+  const [page,setPage]=useState('Projects')
+  const [message,setMessage]=useState(initial.error)
+  const [previous,setPrevious]=useState<Portfolio|null>(null)
+  const latest=useRef(portfolio)
+  const [savedVersion]=useState(()=>{try{return localStorage.getItem(workspaceKey)}catch{return null}})
+  const stored=useRef(savedVersion)
+  const project=portfolio.projects.find(p=>p.id===active && !p.archived)
+  function commit(next:Portfolio,restore=false){
+    try{
+      if(initial.error && !restore && !stored.current)throw Error(initial.error)
+      const persisted=localStorage.getItem(workspaceKey)
+      if(persisted!==stored.current)throw Error('Another tab changed this workspace. Export your backup, then reload before editing.')
+      if(initial.error && !restore && latest.current===initial.data)throw Error(initial.error)
+      const raw=JSON.stringify(next)
+      if(persisted) localStorage.setItem(backupKey,persisted)
+      localStorage.setItem(workspaceKey,raw);stored.current=raw
+      setPrevious(latest.current);latest.current=next;setPortfolio(next);setMessage('')
+      return true
+    }catch(e){setMessage(e instanceof DOMException?'Unable to save. Browser storage may be full or unavailable. Export a backup.':String(e));return false}
   }
-  return <div className="workspace">
-    <header className="mast no-print"><div className="mast-inner"><div className="brand"><i aria-hidden="true">QS</i> QS Easy</div><span>Commercial workspace</span></div></header>
-    <div className="shell"><nav className="rail no-print" aria-label="Workspace">
-      {(Object.keys(views) as View[]).map(view => <button key={view} aria-current={currentView === view ? 'page' : undefined} onClick={() => setCurrentView(view)}>{views[view]}</button>)}
-    </nav><main>
-      <header className="project no-print"><div><small>PROJECT</small><h1>{project.name}</h1><p>{project.description}</p></div>
-      <button className="reset" onClick={() => { if (confirm('Replace this project with the original example?')) setProject(initialProject) }}>Reset project</button></header>
-      {saveError && <p role="alert">Browser storage is unavailable. Changes will last for this session only.</p>}
-      {currentView === 'dashboard' && <Dashboard project={project} open={setCurrentView}/>}
-      {currentView === 'boq' && <BoQ project={project} setProject={setProject}/>}
-      {currentView === 'variations' && <Variations project={project} setProject={setProject}/>}
-      {(currentView === 'takeoff' || currentView === 'rate') && <SurveyTool key={currentView} mode={currentView} onAdd={item => setProject(p => ({ ...p, items: [...p.items, item] }))}/>}
-      {currentView === 'report' && <ReportView project={project}/>}
-    </main></div></div>
+  function open(p:Project){setActive(p.id);show('Overview');setPage('Project')}
+  function save(p:Project){const data=latest.current
+    if(data.projects.find(x=>x.id===p.id)!==portfolio.projects.find(x=>x.id===p.id)){setMessage('The project changed while this action was in progress. Try again.');return false}
+    return commit({...data,projects:data.projects.map(old=>old.id===p.id?p:old)})}
+  function setProject(change:React.SetStateAction<Project>){const current=latest.current.projects.find(p=>p.id===active);if(current)save(typeof change==='function'?change(current):change)}
+  const navigate=(v:'boq'|'variations'|'takeoff'|'rate')=>show(({boq:'Bill of quantities',variations:'Variation ledger',takeoff:'Take-off calculator',rate:'Unit rate build-up'})[v])
+  const views=['Overview','Bill of quantities','Take-off calculator','Unit rate build-up','Rate library','Variation ledger','Valuations','Cost forecast','Cash flow','Tender comparison','Risks','Site diary','Documents','Spreadsheets','QS review','Cost report']
+  const cloud=<Cloud project={project} receive={p=>{const data=latest.current;if(commit({...data,projects:[...data.projects.filter(x=>x.id!==p.id),p]}))open(p)}}/>
+  return <div className="workspace"><header className="mast no-print"><div className="mast-inner"><div className="brand"><i aria-hidden="true">QS</i> QS Easy</div><span>Commercial workspace</span></div></header>
+  <div className="shell"><nav className="rail no-print" aria-label="Workspace"><button aria-current={page==='Projects'?'page':undefined} onClick={()=>setPage('Projects')}>My projects</button><button onClick={()=>setPage('Cloud')}>Cloud projects</button>
+    {project && views.map(v=><button key={v} aria-current={page==='Project'&&v===view?'page':undefined} onClick={()=>{setPage('Project');show(v)}}>{v}</button>)}</nav>
+  <main><div className="toolbar no-print">{previous && <button onClick={()=>{if(commit(previous!))setPrevious(null)}}>Undo last change</button>}</div>
+  {message && <p role="alert">{message}</p>}
+  <div hidden={page!=='Cloud'}>{cloud}</div>
+  {page==='Cloud'?null:page==='Projects'||!project?<><header className="project"><div><h1>My projects</h1><p>{portfolio.projects.length?'Open a project or start a new one.':'Create your first project to start measuring and pricing work.'}</p></div></header>
+  <section className="panel"><h2>Create a project</h2><Entry fields={[{key:'name',label:'Project name'},{key:'description',label:'Description',optional:true}]} action="Create blank project" submit={v=>{
+    const p:Project={id:crypto.randomUUID(),name:v.name,description:v.description,items:[],variations:[]}
+    if(commit({...latest.current,projects:[...latest.current.projects,p]}))open(p)
+  }}/></section>
+  {portfolio.projects.map(p=><section className="panel project-row" key={p.id}><h2>{p.name}</h2><p>{p.archived?'Archived':p.description}</p>
+  {!p.archived && <button onClick={()=>open(p)}>Open project</button>} <button onClick={()=>save({...p,archived:!p.archived})}>{p.archived?'Restore project':'Archive project'}</button>
+  <details><summary>Project details</summary><Entry fields={[{key:'name',label:'Project name',value:p.name},{key:'description',label:'Description',optional:true,value:p.description}]} action="Save details" submit={v=>{save({...p,name:v.name,description:v.description})}}/></details></section>)}
+  <details className="panel"><summary>Backups and restore</summary><button onClick={()=>download('qs-easy-backup.json',JSON.stringify(portfolio),'application/json')}>Export workspace backup</button>
+  <button onClick={()=>{try{const data=JSON.parse(localStorage.getItem(backupKey)||'null');if(!isPortfolio(data))throw Error('No automatic backup available.');if(confirm('Restore the previous saved workspace?'))commit(data,true)}catch(e){setMessage(String(e))}}}>Restore previous save</button>
+  <label>Restore backup file<input type="file" accept=".json" onChange={async e=>{const f=e.target.files?.[0];e.target.value='';if(!f)return;try{const data=JSON.parse(await f.text());if(!isPortfolio(data))throw Error('Invalid backup.');if(confirm('Replace your workspace with this backup?'))commit(data,true)}catch(err){setMessage(String(err))}}}/></label></details></>:
+  <div key={project.id}><header className="project no-print"><div><small>PROJECT</small><h1>{project.name}</h1><p>{project.description}</p></div></header>
+  {view==='Overview' && <Dashboard project={project} open={navigate}/>}
+  {view==='Bill of quantities' && <BoQ project={project} setProject={setProject}/>}
+  {view==='Variation ledger' && <Variations project={project} setProject={setProject}/>}
+  {['Take-off calculator','Unit rate build-up'].includes(view) && <SurveyTool key={view} mode={view==='Take-off calculator'?'takeoff':'rate'} onAdd={item=>setProject(p=>({...p,items:[...p.items,item]}))}/>}
+  {['Valuations','Cost forecast','Cash flow','Risks','Tender comparison'].includes(view) && <Commercial key={view} view={view} p={project} save={save}/>}
+  {['Rate library','Site diary','Documents','Spreadsheets'].includes(view) && <DataTools key={view} view={view} p={project} rates={portfolio.rates} save={p=>{if(!save(p))throw Error('Project update could not be saved.')}} saveRates={rates=>{if(!commit({...latest.current,rates}))throw Error('Rates could not be saved.')}}/>}
+  {view==='QS review' && <Review p={project}/>}
+  {view==='Cost report' && <><ReportSettings p={project} save={save}/><ReportView project={project}/></>}
+  </div>}</main></div></div>
+}
+function ReportSettings({p,save}:{p:Project;save:(p:Project)=>void}){
+  return <details className="panel no-print"><summary>Report details and branding</summary><Entry fields={Object.entries({company:'Company',client:'Client',reference:'Project number',period:'Reporting period',author:'Prepared by',comments:'Comments',approval:'Approval'}).map(([key,label])=>({key,label,optional:true,value:p.report?.[key as keyof NonNullable<Project['report']>]}))} action="Save report details" submit={v=>save({...p,report:{company:v.company,client:v.client,reference:v.reference,period:v.period,author:v.author,comments:v.comments,approval:v.approval}})}/></details>
 }
 
 const pounds = (value: number) => value.toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 2, minimumFractionDigits: 0 })
@@ -114,7 +133,8 @@ function BoQ({ project, setProject }: { project: Project, setProject: React.Disp
   const [newProg, setNewProg] = useState<number>(0);
 
   const addItem = () => {
-    if (!newDesc) return;
+    if (!newDesc.trim() || newQty < 0 || newRate < 0 || newProg < 0 || newProg > 100 || !newUnit.trim()) {window.alert('Enter a description, unit, non-negative quantity and rate, and progress from 0 to 100%.');return}
+    if(project.items.some(i=>i.description.trim().toLowerCase()===newDesc.trim().toLowerCase()) && !confirm('An item has this description. Add another?'))return;
     const newItem: BoQItem = {
       id: Math.random().toString(36).substring(2, 9),
       description: newDesc,
@@ -139,6 +159,7 @@ function BoQ({ project, setProject }: { project: Project, setProject: React.Disp
   return (
     <div className="bg-white p-8 rounded-xl shadow-sm">
       <h3 className="text-2xl font-bold mb-6">Bill of Quantities</h3>
+      {project.items.some(i=>i.unitRate===0) && <p>Check pricing: one or more bill items have a zero rate.</p>}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8 p-6 bg-slate-50 rounded-xl border">
         <label>Description<input className="col-span-2 md:col-span-3 p-2 border rounded" placeholder="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} /></label>
         <label>Category<select className="p-2 border rounded" value={newCategory} onChange={(e) => setNewCategory(e.target.value as Category)}>
@@ -185,8 +206,8 @@ function BoQ({ project, setProject }: { project: Project, setProject: React.Disp
                   </select>
                 </td>
                 <td className="p-2 border"><input className="w-full bg-transparent" value={item.unit} onChange={(e) => updateItem(item.id, { unit: e.target.value })} /></td>
-                <td className="p-2 border"><input className="w-full bg-transparent" type="number" value={item.quantity} onChange={(e) => updateItem(item.id, { quantity: Number(e.target.value) })} /></td>
-                <td className="p-2 border"><input className="w-full bg-transparent" type="number" value={item.unitRate} onChange={(e) => updateItem(item.id, { unitRate: Number(e.target.value) })} /></td>
+                <td className="p-2 border"><input className="w-full bg-transparent" type="number" value={item.quantity} onChange={(e) => updateItem(item.id, { quantity: Math.max(0,Number(e.target.value)) })} /></td>
+                <td className="p-2 border"><input className="w-full bg-transparent" type="number" value={item.unitRate} onChange={(e) => updateItem(item.id, { unitRate: Math.max(0,Number(e.target.value)) })} /></td>
                 <td className="p-2 border font-bold">£{(item.quantity * item.unitRate).toLocaleString()}</td>
                 <td className="p-2 border">
                   <div className="flex flex-col gap-1">
@@ -194,7 +215,7 @@ function BoQ({ project, setProject }: { project: Project, setProject: React.Disp
                     <div className="w-full bg-slate-200 rounded-full h-1.5">
                       <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: `${item.progress}%` }}></div>
                     </div>
-                    <input className="w-full bg-transparent text-[10px]" type="number" value={item.progress} onChange={(e) => updateItem(item.id, { progress: Number(e.target.value) })} />
+                    <input className="w-full bg-transparent text-[10px]" type="number" value={item.progress} onChange={(e) => updateItem(item.id, { progress: Math.max(0,Math.min(100,Number(e.target.value))) })} />
                   </div>
                 </td>
                 <td className="p-2 border text-center"><button onClick={() => removeItem(item.id)} className="text-red-500 hover:text-red-700">Delete</button></td>
@@ -236,6 +257,7 @@ function Variations({ project, setProject }: { project: Project, setProject: Rea
   return (
     <div className="bg-white p-8 rounded-xl shadow-sm">
       <h3 className="text-2xl font-bold mb-6">Variation Ledger</h3>
+      <div className="stats">{(["Pending","Approved","Rejected"] as const).map(status=><div className="panel" key={status}><small>{status}</small><strong>{pounds(project.variations.filter(v=>v.status===status).reduce((sum,v)=>sum+v.impactAmount,0))}</strong></div>)}</div>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 p-6 bg-slate-50 rounded-xl border">
         <div className="md:col-span-2">
           <label className="block text-xs font-bold text-slate-500 mb-1">Description</label>
@@ -259,7 +281,7 @@ function Variations({ project, setProject }: { project: Project, setProject: Rea
         <table className="w-full border-collapse">
           <thead className="bg-slate-50 text-left">
             <tr>
-              <th className="p-3 border">Date</th>
+              <th className="p-3 border">Submission and evidence</th>
               <th className="p-3 border">Description</th>
               <th className="p-3 border">Impact</th>
               <th className="p-3 border">Status</th>
@@ -269,7 +291,7 @@ function Variations({ project, setProject }: { project: Project, setProject: Rea
           <tbody>
             {project.variations.map((v) => (
               <tr key={v.id} className="hover:bg-slate-50">
-                <td className="p-2 border"><input className="w-full bg-transparent" value={v.date} onChange={(e) => updateVariation(v.id, { date: e.target.value })} /></td>
+                <td><details><summary>{v.reference || v.date || 'Variation details'}</summary><label>Reference<input value={v.reference||''} onChange={e=>updateVariation(v.id,{reference:e.target.value})}/></label><label>Submitted<input type="date" value={v.date} onChange={e=>updateVariation(v.id,{date:e.target.value})}/></label><label>Contractor quotation (£)<input type="number" step="any" value={v.quotation??''} onChange={e=>updateVariation(v.id,{quotation:e.target.value===''?undefined:Number(e.target.value)})}/></label><label>Approval date<input type="date" value={v.approvedOn||''} onChange={e=>updateVariation(v.id,{approvedOn:e.target.value})}/></label><label>Supporting notes<textarea value={v.notes||''} onChange={e=>updateVariation(v.id,{notes:e.target.value})}/></label></details></td>
                 <td className="p-2 border"><input className="w-full bg-transparent" value={v.description} onChange={(e) => updateVariation(v.id, { description: e.target.value })} /></td>
                 <td className={`p-2 border font-bold ${v.impactAmount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {v.impactAmount >= 0 ? '+' : ''}£{v.impactAmount.toLocaleString()}
@@ -298,6 +320,7 @@ function ReportView({ project }: { project: Project }) {
     <div className="bg-white p-12 rounded-xl shadow-lg max-w-4xl mx-auto border">
       <div className="text-center mb-10">
         <h1 className="text-4xl font-bold text-slate-900">Project Cost Summary</h1>
+        {project.report && <div>{Object.entries({Company:project.report.company,Client:project.report.client,Reference:project.report.reference,Period:project.report.period,"Prepared by":project.report.author,Comments:project.report.comments,Approval:project.report.approval}).filter(([,v])=>v).map(([k,v])=><p key={k}><b>{k}</b> · {v}</p>)}</div>}
         <p className="text-slate-500 mt-2">{project.name}</p>
         <p className="text-slate-400 italic">{project.description}</p>
       </div>
